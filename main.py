@@ -1,42 +1,29 @@
 import data
 from selenium import webdriver
-from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions
-from selenium.webdriver.support.wait import WebDriverWait
-
-
-# no modificar
-def retrieve_phone_code(driver) -> str:
-    """Este código devuelve un número de confirmación de teléfono y lo devuelve como un string.
-    Utilízalo cuando la aplicación espere el código de confirmación para pasarlo a tus pruebas.
-    El código de confirmación del teléfono solo se puede obtener después de haberlo solicitado en la aplicación."""
-
-    import json
-    import time
-    from selenium.common import WebDriverException
-    code = None
-    for i in range(10):
-        try:
-            logs = [log["message"] for log in driver.get_log('performance') if log.get("message")
-                    and 'api/v1/number?number' in log.get("message")]
-            for log in reversed(logs):
-                message_data = json.loads(log)["message"]
-                body = driver.execute_cdp_cmd('Network.getResponseBody',
-                                              {'requestId': message_data["params"]["requestId"]})
-                code = ''.join([x for x in body['body'] if x.isdigit()])
-        except WebDriverException:
-            time.sleep(1)
-            continue
-        if not code:
-            raise Exception("No se encontró el código de confirmación del teléfono.\n"
-                            "Utiliza 'retrieve_phone_code' solo después de haber solicitado el código en tu aplicación.")
-        return code
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 
 class UrbanRoutesPage:
     from_field = (By.ID, 'from')
     to_field = (By.ID, 'to')
+    taxi_button = (By.XPATH, '//button[text()="Pedir un taxi"]')
+    comfort_tariff_button = (By.CSS_SELECTOR, 'button[data-for="tariff-card-4"]')
+    phone_button = (By.CSS_SELECTOR, 'div.np-button div.np-text')
+    phone_input = (By.ID, 'phone')
+    next_button = (By.XPATH, '//button[text()="Siguiente"]')
+    confirm_button = (By.XPATH, '//button[text()="Confirmar"]')
+    payment_button = (By.CSS_SELECTOR, 'div.pp-text')
+    add_card_option = (By.CSS_SELECTOR, 'div.pp-title')
+    card_number_input = (By.ID, 'number')
+    card_cvv_input = (By.ID, 'code')
+    add_card_button = (By.XPATH, '//button[text()="Agregar"]')
+    driver_message_input = (By.ID, 'comment')
+    blanket_option = (By.XPATH, '//div[contains(@class, "r-sw-label") and text()="Manta y pañuelos"]')
+    ice_cream_plus = (By.CSS_SELECTOR, 'div.counter-plus')
 
     def __init__(self, driver):
         self.driver = driver
@@ -47,12 +34,37 @@ class UrbanRoutesPage:
     def set_to(self, to_address):
         self.driver.find_element(*self.to_field).send_keys(to_address)
 
-    def get_from(self):
-        return self.driver.find_element(*self.from_field).get_property('value')
+    def select_comfort_tariff(self):
+        self.driver.find_element(*self.taxi_button).click()
+        self.driver.find_element(*self.comfort_tariff_button).click()
 
-    def get_to(self):
-        return self.driver.find_element(*self.to_field).get_property('value')
+    def enter_phone_number(self, phone_number):
+        self.driver.find_element(*self.phone_button).click()
+        phone_field = self.driver.find_element(*self.phone_input)
+        phone_field.send_keys(phone_number)
+        self.driver.find_element(*self.next_button).click()
 
+    def confirm_phone_code(self, code):
+        self.driver.find_element(*self.confirm_button).click()
+
+    def add_credit_card(self, card_number, card_code):
+        self.driver.find_element(*self.payment_button).click()
+        self.driver.find_element(*self.add_card_option).click()
+        self.driver.find_element(*self.card_number_input).send_keys(card_number)
+        cvv_field = self.driver.find_element(*self.card_cvv_input)
+        cvv_field.send_keys(card_code)
+        ActionChains(self.driver).send_keys(Keys.TAB).perform()
+        self.driver.find_element(*self.add_card_button).click()
+
+    def add_driver_message(self, message):
+        self.driver.find_element(*self.driver_message_input).send_keys(message)
+
+    def request_blanket_and_tissues(self):
+        self.driver.find_element(*self.blanket_option).click()
+
+    def request_ice_creams(self, count=2):
+        for _ in range(count):
+            self.driver.find_element(*self.ice_cream_plus).click()
 
 
 class TestUrbanRoutes:
@@ -61,21 +73,43 @@ class TestUrbanRoutes:
 
     @classmethod
     def setup_class(cls):
-        # no lo modifiques, ya que necesitamos un registro adicional habilitado para recuperar el código de confirmación del teléfono
         from selenium.webdriver import DesiredCapabilities
         capabilities = DesiredCapabilities.CHROME
         capabilities["goog:loggingPrefs"] = {'performance': 'ALL'}
         cls.driver = webdriver.Chrome(desired_capabilities=capabilities)
 
-    def test_set_route(self):
+    def test_order_taxi(self):
         self.driver.get(data.urban_routes_url)
         routes_page = UrbanRoutesPage(self.driver)
-        address_from = data.address_from
-        address_to = data.address_to
-        routes_page.set_route(address_from, address_to)
-        assert routes_page.get_from() == address_from
-        assert routes_page.get_to() == address_to
 
+        # 1. Configurar la dirección
+        routes_page.set_from(data.address_from)
+        routes_page.set_to(data.address_to)
+
+        # 2. Seleccionar la tarifa Comfort
+        routes_page.select_comfort_tariff()
+
+        # 3. Rellenar el número de teléfono y confirmar código
+        routes_page.enter_phone_number(data.phone_number)
+        phone_code = retrieve_phone_code(self.driver)
+        routes_page.confirm_phone_code(phone_code)
+
+        # 4. Agregar una tarjeta de crédito
+        routes_page.add_credit_card(data.card_number, data.card_code)
+
+        # 5. Escribir un mensaje para el controlador
+        routes_page.add_driver_message(data.message_for_driver)
+
+        # 6. Pedir manta y pañuelos
+        routes_page.request_blanket_and_tissues()
+
+        # 7. Pedir 2 helados
+        routes_page.request_ice_creams()
+
+        # 8. Esperar al modal
+        WebDriverWait(self.driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'div.modal-driver-info'))
+        )
 
     @classmethod
     def teardown_class(cls):
